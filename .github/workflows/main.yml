@@ -2,8 +2,8 @@ name: Mirror Docker Hub to GHCR with Versioning
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 每天 UTC 0 点执行
-  workflow_dispatch:
+    - cron: '0 0 * * *'   # 每天 UTC 0 点执行一次
+  workflow_dispatch:       # 手动触发
     inputs:
       source_image:
         description: '源 Docker Hub 镜像名 (含 tag)'
@@ -17,11 +17,6 @@ on:
 jobs:
   mirror:
     runs-on: ubuntu-latest
-
-    permissions:
-      packages: write   # 允许推送到 GHCR
-      contents: read
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -33,11 +28,7 @@ jobs:
           echo "Pulled $SOURCE"
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Detect new version
         run: |
@@ -45,15 +36,15 @@ jobs:
           TARGET_NAME=${{ github.event.inputs.target_image }}
           TAG=$(echo $SOURCE | cut -d':' -f2)
           DATE_TAG=$(date +%Y%m%d%H%M)  # 日期时间戳
-          HIST_TARGET=ghcr.io/${{ github.repository_owner }}/$TARGET_NAME:$DATE_TAG
-          LATEST_TARGET=ghcr.io/${{ github.repository_owner }}/$TARGET_NAME:latest
+          HIST_TARGET=ghcr.io/${{ github.actor }}/$TARGET_NAME:$DATE_TAG
+          LATEST_TARGET=ghcr.io/${{ github.actor }}/$TARGET_NAME:latest
 
           # 尝试拉 GHCR 最新镜像
           if docker pull $LATEST_TARGET 2>/dev/null; then
             # 获取 latest 镜像 digest
             LATEST_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $LATEST_TARGET | cut -d'@' -f2)
             # 获取源镜像 digest
-            SOURCE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $SOURCE | cut -d'@' -f2)
+            SOURCE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $SOURCE 2>/dev/null || echo "")
             if [ "$LATEST_DIGEST" == "$SOURCE_DIGEST" ]; then
               echo "No new version detected. Skipping push."
               exit 0
