@@ -1,0 +1,63 @@
+name: Mirror Docker Hub to GHCR with Versioning
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 每天 UTC 0 点执行
+  workflow_dispatch:
+    inputs:
+      source_image:
+        description: '源 Docker Hub 镜像名 (含 tag)'
+        required: true
+        default: 'uncleluo/mous:latest'
+      target_image:
+        description: '目标 GHCR 镜像名 (不含 ghcr.io/用户名)'
+        required: true
+        default: 'onesap'
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Pull Docker Hub image
+        run: |
+          SOURCE=${{ github.event.inputs.source_image }}
+          docker pull $SOURCE
+          echo "Pulled $SOURCE"
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Detect new version
+        run: |
+          SOURCE=${{ github.event.inputs.source_image }}
+          TARGET_NAME=${{ github.event.inputs.target_image }}
+          TAG=$(echo $SOURCE | cut -d':' -f2)
+          DATE_TAG=$(date +%Y%m%d%H%M)  # 日期时间戳
+          HIST_TARGET=ghcr.io/${{ github.actor }}/$TARGET_NAME:$DATE_TAG
+          LATEST_TARGET=ghcr.io/${{ github.actor }}/$TARGET_NAME:latest
+
+          # 尝试拉 GHCR 最新镜像
+          if docker pull $LATEST_TARGET 2>/dev/null; then
+            # 获取 latest 镜像 digest
+            LATEST_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $LATEST_TARGET | cut -d'@' -f2)
+            # 获取源镜像 digest
+            SOURCE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $SOURCE 2>/dev/null || echo "")
+            if [ "$LATEST_DIGEST" == "$SOURCE_DIGEST" ]; then
+              echo "No new version detected. Skipping push."
+              exit 0
+            fi
+          fi
+          echo "New version detected. Will push to GHCR."
+          echo "HIST_TARGET=$HIST_TARGET" >> $GITHUB_ENV
+          echo "LATEST_TARGET=$LATEST_TARGET" >> $GITHUB_ENV
+
+      - name: Tag and push image
+        run: |
+          docker tag ${{ github.event.inputs.source_image }} $HIST_TARGET
+          docker tag ${{ github.event.inputs.source_image }} $LATEST_TARGET
+          docker push $HIST_TARGET
+          docker push $LATEST_TARGET
+          echo "Pushed $HIST_TARGET and updated latest tag $LATEST_TARGET"
